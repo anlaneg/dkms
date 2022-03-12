@@ -572,11 +572,13 @@ read_conf()
     done
 
     # Use the generic make and make clean commands if not specified
+    # 定义kernel的编译命令行,clean命令行
     [[ ! $make_command ]] && make_command="make -C $kernel_source_dir M=$dkms_tree/$module/$module_version/build"
     [[ ! $clean ]] && clean="make -C $kernel_source_dir M=$dkms_tree/$module/$module_version/build clean"
 
     # Check if clang was used to compile or lld was used to link the kernel.
     if [[ -e $kernel_source_dir/vmlinux ]]; then
+      #自vmlinux中读取make_command
       if  readelf -p .comment $kernel_source_dir/vmlinux | grep -q clang; then
         make_command="${make_command} CC=clang"
       fi
@@ -584,6 +586,7 @@ read_conf()
         make_command="${make_command} LD=ld.lld"
       fi
     elif [[ -e $kernel_source_dir/.config ]]; then
+      #自.config文件中读取make_command
       if grep -q CONFIG_CC_IS_CLANG=y $kernel_source_dir/.config; then
         make_command="${make_command} CC=clang"
       fi
@@ -612,12 +615,14 @@ read_conf()
     fi
 
     # Fail if no PACKAGE_NAME
+    #config文件必须提供PACKAGE_NAME
     if [[ ! $package_name ]]; then
         echo $"dkms.conf: Error! No 'PACKAGE_NAME' directive specified.">&2
         return_value=1
     fi
 
     # Fail if no PACKAGE_VERSION
+    #config文件必须提供PACKAGE_VERSION
     if [[ ! $package_version ]]; then
         echo $"dkms.conf: Error! No 'PACKAGE_VERSION' directive specified.">&2
         return_value=1
@@ -736,6 +741,7 @@ check_version_sanity()
     return 0
 }
 
+#必须提供module,module_version
 check_module_args() {
     [[ $module && $module_version ]] && return
     die 1 $"Arguments <module> and <module-version> are not specified." \
@@ -819,24 +825,29 @@ add_module()
 
     # Check that this module-version hasn't already been added
     if is_module_added "$module" "$module_version"; then
+	#此module已存在
         die 3 $"DKMS tree already contains: $module-$module_version" \
             $"You cannot add the same module/version combo more than once."
     fi
 
+    #如果未提供conf文件，使用默认conf文件(一般deb安装时已放入此路径）
     [[ $conf ]] || conf="$source_tree/$module-$module_version/dkms.conf"
 
     # Check that /usr/src/$module-$module_version exists
     if ! [[ -d $source_tree/$module-$module_version ]]; then
+        #代码目录必须存在
         die 2 $"Could not find module source directory." \
             $"Directory: $source_tree/$module-$module_version does not exist."
     fi
 
+    #读取配置文件
     # Check the conf file for sanity
     read_conf_or_die "$kernelver" "$arch" "$conf"
 
     # Create the necessary dkms tree structure
     echo $"Creating symlink $dkms_tree/$module/$module_version/source -> $source_tree/$module-$module_version"
     mkdir -p "$dkms_tree/$module/$module_version/build"
+    #创建链接，链接到source目录
     ln -s "$source_tree/$module-$module_version" "$dkms_tree/$module/$module_version/source"
 
     # Run the post_add script
@@ -895,10 +906,12 @@ prepare_build()
 
     # Set up temporary build directory for build
     rm -rf "$build_dir"
+    #复制代码到临时目录，准备编译
     cp -a "$source_dir/" "$build_dir"
 
     cd "$build_dir"
 
+    #应用补丁
     # Apply any patches
     for p in "${patch_array[@]}"; do
         [[ ! -e $build_dir/patches/$p ]] && \
@@ -910,6 +923,7 @@ prepare_build()
             $"Check $build_dir for more information."
     done
 
+    #执行pre build脚本
     # Run the pre_build script
     run_build_script pre_build "$pre_build"
 }
@@ -925,11 +939,13 @@ actual_build()
     echo $""
     echo $"Building module:"
 
+    #执行用户执行的clean命令
     invoke_command "$clean" "cleaning build area" background
     echo $"DKMS make.log for $module-$module_version for kernel $kernelver ($arch)" >> "$build_log"
     date >> "$build_log"
     local the_make_command="${make_command/#make/make -j$parallel_jobs KERNELRELEASE=$kernelver}"
 
+    #执行make命令
     invoke_command "{ $the_make_command; } >> $build_log 2>&1" "$the_make_command" background || \
         report_build_problem 10 $"Bad return status for module build on kernel: $kernelver ($arch)" \
         $"Consult $build_log for more information."
@@ -946,6 +962,7 @@ actual_build()
     cd - >/dev/null
 
     # Build success, so create DKMS structure for a built module
+    # 将build_log移至make.log中
     mkdir -p "$base_dir/log"
     [[ $kernel_config ]] && cp -f "$kernel_config" "$base_dir/log/"
     mv -f "$build_log" "$base_dir/log/make.log" 2>/dev/null
@@ -1229,21 +1246,25 @@ list_each_installed_module()
     done
 }
 
+#module目录必须存在，版本目录必须存在，source目录必须存在
 is_module_added() {
     [[ $1 && $2 ]] || return 1
     [[ -d $dkms_tree/$1/$2 ]] || return 2
     [[ -L $dkms_tree/$1/$2/source || -d $dkms_tree/$1/$2/source ]];
 }
 
+#检查给定module的指定版本是否已编译
 is_module_built() {
     [[ $1 && $2 && $3 && $4 ]] || return 1
     local d="$dkms_tree/$1/$2/$3/$4" m=''
+    #module目录必须存在
     [[ -d $d/module ]] || return 1
     local default_conf="$dkms_tree/$1/$2/source/dkms.conf"
     # If a custom dkms.conf was specified use it, otherwise use the default one.
     local real_conf="${conf:-${default_conf}}"
     read_conf_or_die "$3" "$4" "$real_conf"
     set_module_suffix "$3"
+    #遍历要生成的目标module名称,对应的module必须存在
     for m in "${dest_module_name[@]}"; do
         local t=$(compressed_or_uncompressed "$d/module" "$m")
         test -n "$t" || return 1
@@ -1270,10 +1291,12 @@ maybe_add_module() (
 )
 
 maybe_build_module() (
+    #如果已编译，直接退出
     is_module_built "$1" "$2" "$3" "$4" && {
         echo $"Module $1/$2 already built for kernel $3 ($4)."
         return 0
     }
+    #执行编译
     module="$1" module_version="$2" kernelver="$3" arch="$4" do_build
 )
 
@@ -1285,8 +1308,10 @@ maybe_install_module() (
     module="$1" module_version="$2" kernelver="$3" arch="$4" do_install
 )
 
+#执行模块编译
 build_module() {
     local i=0
+    #遍历给定的kernel version进行此module的编译
     for ((i=0; i < ${#kernelver[@]}; i++)); do
         maybe_build_module "$module" "$module_version" "${kernelver[$i]}" "${arch[$i]}"
     done
@@ -1972,11 +1997,13 @@ parse_moduleversion(){
     fi
 }
 
+#必须为root用户
 check_root() {
     [[ $(id -u) = 0 ]] && return
     die 1 $"You must be root to use this command."
 }
 
+#必须对dkms_tree有读写权限
 check_rw_dkms_tree() {
     [[ -w "$dkms_tree" ]] && return
     die 1 $"No write access to DKMS tree at ${dkms_tree}"
@@ -2370,6 +2397,7 @@ remove | unbuild | uninstall)
     ${action}_module
     ;;
 add | build | install)
+    #不支持-all参数
     check_all_is_banned $action # TODO: fix/enable --all
     [[ $action = install ]] && check_root || check_rw_dkms_tree
     ${action}_module
